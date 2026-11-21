@@ -1,0 +1,27 @@
+{
+  "name": "demo-slotlockproject",
+  "description": "API κρατήσεων που δεν επιτρέπει διπλοκράτηση ούτε με ταυτόχρονα αιτήματα (Node, Express, Sequelize), με προσομοιωτή στον browser.",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 8998",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-sans": "^5.2.0",
+    "@fontsource/jetbrains-mono": "^5.2.0",
+    "vue": "^3.5.17",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "~5.6.2",
+    "vite": "^6.0.1",
+    "vitest": "^3.0.0",
+    "vue-tsc": "^2.2.0"
+  }
+}
