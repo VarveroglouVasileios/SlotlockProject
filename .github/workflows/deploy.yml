@@ -28,6 +28,7 @@ jobs:
       - run: yarn build
         env:
           VITE_BASE: /SlotlockProject/
+          VITE_API_URL: https://slotlock-api-vy5m.onrender.com
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

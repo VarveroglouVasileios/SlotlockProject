@@ -4,13 +4,22 @@ import { fileURLToPath, URL } from 'node:url'
 
 // Security baseline for static hosting. GitHub Pages cannot send response headers, so the policy
 // is delivered as a <meta> tag (frame-ancestors and report-uri are ignored in meta by browsers).
+// The optional live demo calls the hosted API; only that origin is added to connect-src.
+const apiOrigin = ((): string => {
+  try {
+    return process.env.VITE_API_URL ? new URL(process.env.VITE_API_URL).origin : ''
+  } catch {
+    return ''
+  }
+})()
+
 const CSP = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self' data:",
-  "connect-src 'self'",
+  `connect-src 'self'${apiOrigin ? ' ' + apiOrigin : ''}`,
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
