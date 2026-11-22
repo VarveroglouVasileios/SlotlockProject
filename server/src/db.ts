@@ -46,8 +46,9 @@ export function initModels(sequelize: Sequelize): void {
 }
 
 export async function connect(url = process.env.DATABASE_URL, storage?: string): Promise<Sequelize> {
+  // Query parameters such as sslmode and channel_binding are dropped: TLS is configured explicitly below.
   const sequelize = url?.startsWith('postgres')
-    ? new Sequelize(url, { logging: false, dialectOptions: process.env.PGSSL === 'off' ? {} : { ssl: { require: true, rejectUnauthorized: false } } })
+    ? new Sequelize(url.split('?')[0], { logging: false, dialectOptions: process.env.PGSSL === 'off' ? {} : { ssl: { require: true, rejectUnauthorized: false } } })
     : new Sequelize({ dialect: 'sqlite', storage: storage ?? ':memory:', logging: false })
   initModels(sequelize)
   await sequelize.sync()
