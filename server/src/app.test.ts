@@ -5,7 +5,7 @@ import request from 'supertest'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import type { Sequelize } from 'sequelize'
 import { createApp } from './app.js'
-import { Booking, SlotLock, connect } from './db.js'
+import { Booking, SlotLock, cleanup, connect } from './db.js'
 
 const now = Date.parse('2026-11-21T09:00:00Z')
 const dir = mkdtempSync(join(tmpdir(), 'slotlock-'))
@@ -14,7 +14,7 @@ let app: ReturnType<typeof createApp>
 
 beforeAll(async () => {
   sequelize = await connect(undefined, join(dir, 'test.sqlite'))
-  app = createApp(sequelize, { now: () => now })
+  app = createApp(sequelize, { now: () => now, allowedOrigins: ['https://demo.example'], rateLimitPerMinute: 1000, maxConfirmed: 40 })
 })
 beforeEach(async () => {
   await SlotLock.destroy({ where: {} })
@@ -129,5 +129,42 @@ describe('cancel and availability', () => {
     expect(r.body.slots.filter((s: { free: boolean }) => !s.free).map((s: { start: string }) => s.start)).toEqual(['2026-12-01T09:00:00Z', '2026-12-01T09:30:00Z', '2026-12-01T10:00:00Z', '2026-12-01T10:30:00Z'])
     expect((await request(app).get('/rooms/room-3/availability?date=nope')).status).toBe(400)
     expect((await request(app).get('/rooms/zzz/availability?date=2026-12-01')).status).toBe(404)
+  })
+})
+
+describe('web access and protection', () => {
+  it('answers preflight and allows only the configured origin', async () => {
+    const ok = await request(app).options('/bookings').set('Origin', 'https://demo.example').set('Access-Control-Request-Method', 'POST')
+    expect(ok.status).toBe(204)
+    expect(ok.headers['access-control-allow-origin']).toBe('https://demo.example')
+    expect(ok.headers['access-control-allow-headers']).toMatch(/Idempotency-Key/)
+    const other = await request(app).options('/bookings').set('Origin', 'https://evil.example')
+    expect(other.headers['access-control-allow-origin']).toBeUndefined()
+    const get = await request(app).get('/health').set('Origin', 'https://demo.example')
+    expect(get.headers['access-control-allow-origin']).toBe('https://demo.example')
+    expect(get.body).toEqual({ ok: true })
+  })
+  it('limits requests per client and does not count /health', async () => {
+    const limited = createApp(sequelize, { now: () => now, rateLimitPerMinute: 3 })
+    for (let i = 0; i < 3; i++) expect((await request(limited).get('/bookings/none')).status).toBe(404)
+    const r = await request(limited).get('/bookings/none')
+    expect(r.status).toBe(429)
+    expect(r.headers['retry-after']).toBe('30')
+    expect((await request(limited).get('/health')).status).toBe(200)
+  })
+  it('stops accepting bookings when the demo database is full', async () => {
+    const small = createApp(sequelize, { now: () => now, maxConfirmed: 1, rateLimitPerMinute: 1000 })
+    expect((await request(small).post('/bookings').send(body())).status).toBe(201)
+    const r = await request(small).post('/bookings').send(body({ start: '2026-12-01T13:00:00Z', end: '2026-12-01T14:00:00Z' }))
+    expect(r.status).toBe(503)
+    expect(r.body.error).toBe('demo_full')
+  })
+  it('removes bookings that ended more than a day ago, with their locks', async () => {
+    const past = createApp(sequelize, { now: () => Date.parse('2026-11-01T00:00:00Z'), rateLimitPerMinute: 1000 })
+    await request(past).post('/bookings').send(body({ start: '2026-11-10T09:00:00Z', end: '2026-11-10T10:00:00Z' }))
+    await request(past).post('/bookings').send(body({ start: '2026-12-20T09:00:00Z', end: '2026-12-20T10:00:00Z' }))
+    expect(await cleanup(sequelize, Date.parse('2026-11-12T00:00:00Z'))).toBe(1)
+    expect(await Booking.count()).toBe(1)
+    expect(await SlotLock.count()).toBe(2)
   })
 })

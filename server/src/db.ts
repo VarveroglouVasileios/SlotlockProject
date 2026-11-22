@@ -1,4 +1,4 @@
-import { DataTypes, Model, Sequelize, type InferAttributes, type InferCreationAttributes } from 'sequelize'
+import { DataTypes, Model, Op, Sequelize, type InferAttributes, type InferCreationAttributes } from 'sequelize'
 
 export class Room extends Model<InferAttributes<Room>, InferCreationAttributes<Room>> {
   declare id: string
@@ -54,4 +54,17 @@ export async function connect(url = process.env.DATABASE_URL, storage?: string):
   if (sequelize.getDialect() === 'sqlite') await sequelize.query('PRAGMA busy_timeout = 5000')
   await Room.bulkCreate([{ id: 'room-3', name: 'Δωμάτιο 3' }, { id: 'room-4', name: 'Δωμάτιο 4' }, { id: 'room-5', name: 'Δωμάτιο 5' }], { ignoreDuplicates: true })
   return sequelize
+}
+
+/** Removes bookings that ended more than a day ago, so the demo database stays small. */
+export async function cleanup(sequelize: Sequelize, nowMs = Date.now()): Promise<number> {
+  const cutoff = new Date(nowMs - 86_400_000).toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const old = await Booking.findAll({ where: { end: { [Op.lt]: cutoff } }, attributes: ['ref'] })
+  if (!old.length) return 0
+  const refs = old.map((b) => b.ref)
+  await sequelize.transaction(async (t) => {
+    await SlotLock.destroy({ where: { bookingRef: refs }, transaction: t })
+    await Booking.destroy({ where: { ref: refs }, transaction: t })
+  })
+  return refs.length
 }

@@ -4,7 +4,16 @@ import { Op, UniqueConstraintError, type Sequelize } from 'sequelize'
 import { Booking, Room, SlotLock } from './db.js'
 import { OPEN_HOUR, CLOSE_HOUR, SLOT_MIN, alternatives, canon, makeRef, slotsOf, validName, validateWindow } from './slots.js'
 
-export interface AppOptions { now?: () => number; random?: () => number }
+export interface AppOptions {
+  now?: () => number
+  random?: () => number
+  /** Browser origins allowed to call the API (CORS). Empty means no cross-origin access. */
+  allowedOrigins?: string[]
+  /** Requests per minute per client address. */
+  rateLimitPerMinute?: number
+  /** Confirmed bookings the database may hold; protects a small free database from filling up. */
+  maxConfirmed?: number
+}
 
 const view = (b: Booking): Record<string, unknown> => ({ ref: b.ref, roomId: b.roomId, start: b.start, end: b.end, name: b.name, status: b.status })
 
@@ -23,11 +32,42 @@ export function createApp(sequelize: Sequelize, opts: AppOptions = {}): express.
   const app = express()
   app.disable('x-powered-by')
   app.use(express.json({ limit: '10kb' }))
-  app.use((_req, res, next) => {
+  app.set('trust proxy', 1)
+  const allowed = new Set(opts.allowedOrigins ?? [])
+  app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff')
     res.setHeader('Cache-Control', 'no-store')
+    const origin = req.header('Origin')
+    if (origin && allowed.has(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin)
+      res.setHeader('Vary', 'Origin')
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS')
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Idempotency-Key')
+      res.setHeader('Access-Control-Expose-Headers', 'Idempotent-Replayed')
+      res.setHeader('Access-Control-Max-Age', '600')
+    }
+    if (req.method === 'OPTIONS') return void res.status(204).end()
     next()
   })
+
+  // Small in-memory limiter per client address (one instance on the free plan): enough to blunt accidental floods.
+  const limit = opts.rateLimitPerMinute ?? 120
+  const hits = new Map<string, number[]>()
+  app.use((req, res, next) => {
+    if (req.path === '/health') return next()
+    const t = now(), key = req.ip ?? 'unknown'
+    const recent = (hits.get(key) ?? []).filter((x) => t - x < 60_000)
+    if (recent.length >= limit) {
+      res.setHeader('Retry-After', '30')
+      return void res.status(429).json({ error: 'rate_limited', message: 'Πάρα πολλά αιτήματα. Δοκιμάστε ξανά σε λίγο.' })
+    }
+    recent.push(t)
+    hits.set(key, recent)
+    if (hits.size > 5000) for (const [k, v] of hits) if (!v.some((x) => t - x < 60_000)) hits.delete(k)
+    next()
+  })
+
+  app.get('/health', (_req, res) => void res.json({ ok: true }))
 
   const busyFor = async (roomId: string, from: number, to: number): Promise<Set<string>> => {
     const rows = await SlotLock.findAll({ where: { roomId, slotStart: { [Op.gte]: canon(from), [Op.lt]: canon(to) } } })
@@ -65,6 +105,9 @@ export function createApp(sequelize: Sequelize, opts: AppOptions = {}): express.
       }
     }
 
+    const maxConfirmed = opts.maxConfirmed ?? 300
+    if ((await Booking.count({ where: { status: 'confirmed' } })) >= maxConfirmed)
+      return void res.status(503).json({ error: 'demo_full', message: 'Το demo έχει γεμίσει κρατήσεις. Ακυρώστε μερικές ή δοκιμάστε αργότερα.' })
     const slots = slotsOf(w.startMs, w.endMs)
     const ref = makeRef(opts.random)
     try {
